@@ -1,0 +1,17 @@
+{
+  "name": "efemerides-sweph",
+  "version": "1.0.0",
+  "private": false,
+  "description": "Wrapper HTTP stateless de Swiss Ephemeris en modo Moshier. POST /api/calc.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "engines": {
+    "node": "20.x"
+  },
+  "scripts": {
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "sweph": "2.10.3-5"
+  }
+}
