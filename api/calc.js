@@ -7,15 +7,39 @@
 // Los números en modo Moshier (SEFLG_MOSEPH | SEFLG_SPEED) son deterministas y, para
 // una misma versión de `sweph`, bit-idénticos a un cálculo nativo con esos flags.
 import sweph from 'sweph';
+import { join } from 'node:path';
+import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { SEAS18_B64 } from '../lib/seas18-data.js';
+
+// Quirón (asteroide 2060) requiere el archivo de asteroides seas_18.se1 (Swiss Eph); Moshier
+// NO lo cubre. El .se1 viaja EMBEBIDO en base64 (lib/seas18-data.js, un import → SIEMPRE entra
+// al bundle del lambda) porque includeFiles no copiaba el binario a la función y el preview SSO
+// de Vercel impedía verificarlo en remoto. En cold start lo materializamos en el dir temporal y
+// apuntamos ahí el ephe path. La ruta sale de process.env (NO de os.tmpdir()) a propósito: el
+// tracer de Vercel evalúa os.tmpdir() en build e intenta bundlear esa ruta (rompe el build). En
+// el lambda (Linux) es /tmp; en local, TEMP/TMP. Si algo fallara, los demás cuerpos (Moshier)
+// quedan intactos; solo Quirón depende de esto. set_ephe_path es global, una vez al cargar.
+const epheDir = join(process.env.TMPDIR || process.env.TEMP || process.env.TMP || '/tmp', 'tdr-ephe');
+try {
+  mkdirSync(epheDir, { recursive: true });
+  const seas = join(epheDir, 'seas_18.se1');
+  if (!existsSync(seas)) writeFileSync(seas, Buffer.from(SEAS18_B64, 'base64'));
+  sweph.set_ephe_path(epheDir);
+} catch { /* sin ephe: Quirón caería a error; el resto (Moshier) no se afecta */ }
 
 const C = sweph.constants;
 const FLAG = C.SEFLG_MOSEPH | C.SEFLG_SPEED;     // eclíptica + velocidad (idéntico al caller)
 const FLAG_EQ = FLAG | C.SEFLG_EQUATORIAL;       // ecuatorial → declinación en data[1]
+// Quirón: Swiss Ephemeris (lee seas_18.se1). Los DEMÁS cuerpos siguen en Moshier (sin
+// regresión). Lilith (Luna Negra media, id 12) es analítica → funciona también con Moshier.
+const FLAG_SWISS = C.SEFLG_SWIEPH | C.SEFLG_SPEED;
+const FLAG_SWISS_EQ = FLAG_SWISS | C.SEFLG_EQUATORIAL;
+const SE_CHIRON = 15;
 
-// Cuerpos por defecto: 7 clásicos + 3 transpersonales + Nodo medio (ids SE_* de sweph:
-// 0=Sol 1=Luna 2=Mercurio 3=Venus 4=Marte 5=Júpiter 6=Saturno 7=Urano 8=Neptuno
-// 9=Plutón 10=Nodo medio). El cliente envía sus ids; este default es para uso directo.
-const DEFAULT_BODIES = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+// Cuerpos por defecto: 7 clásicos + 3 transpersonales + Nodo medio (10) + Lilith (12, Luna
+// Negra media = SE_MEAN_APOG, analítica) + Quirón (15 = SE_CHIRON, vía seas_18.se1). ids SE_*
+// de sweph (0=Sol … 9=Plutón). El cliente envía sus ids; este default es para uso directo.
+const DEFAULT_BODIES = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15];
 
 const HOUSE_SYSTEMS = new Set(['P', 'W', 'K', 'R', 'C', 'O', 'E']);
 
@@ -81,11 +105,16 @@ export default async function handler(req, res) {
     const pts = h.data.points;     // [asc, mc, armc, vertex, ...]
 
     const planets = bodies.map((id) => {
+      // Quirón (15) SOLO existe en Swiss Ephemeris (seas_18.se1); el resto sigue en Moshier
+      // (bit-idéntico al caller, sin regresión). Lilith (12) es analítica → Moshier la cubre.
+      const useSwiss = id === SE_CHIRON;
+      const flag = useSwiss ? FLAG_SWISS : FLAG;
+      const flagEq = useSwiss ? FLAG_SWISS_EQ : FLAG_EQ;
       // Llamada eclíptica: misma firma y flags que el caller → data[0..3] idénticos.
-      const r = sweph.calc_ut(jd, id, FLAG);
+      const r = sweph.calc_ut(jd, id, flag);
       if (r.error && (!r.data || !r.data.length)) throw new Error(`calc_ut(${id}): ${r.error}`);
       // Llamada ecuatorial: independiente, solo para exponer la declinación (Capa 4 futura).
-      const eq = sweph.calc_ut(jd, id, FLAG_EQ);
+      const eq = sweph.calc_ut(jd, id, flagEq);
       const declination = (eq.error && (!eq.data || eq.data.length < 2)) ? null : eq.data[1];
       return {
         id,

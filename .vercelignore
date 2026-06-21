@@ -1,0 +1,4 @@
+# El binario seas_18.se1 viaja EMBEBIDO en base64 (api/seas18-data.js) → no se sirve estático.
+# La carpeta ephe/ se conserva en git como fuente para regenerar (scripts/gen-seas18.mjs).
+ephe/
+scripts/
